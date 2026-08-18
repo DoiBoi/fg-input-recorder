@@ -1,0 +1,4 @@
+# Input stuff
+pygame
+keyboard
+pysdl2-dll
