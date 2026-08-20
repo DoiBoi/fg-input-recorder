@@ -1,4 +1,5 @@
 # Part of the code was taken from https://pysdl2.readthedocs.io/en/0.9.13/modules/sdl2.html and from claude
+from functools import reduce
 import ctypes
 import json
 import os
@@ -14,7 +15,7 @@ sdl_epoch_monotonic = None
 log_fp = None
 
 OVERLAY_MAX_LINES = 12
-overlay_lines: deque[str] = deque(maxlen=OVERLAY_MAX_LINES)
+# overlay_lines: deque[str] = deque(maxlen=OVERLAY_MAX_LINES)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(
@@ -22,7 +23,7 @@ FONT_PATH = os.path.join(
 ).encode("utf-8")
 FONT_SIZE = 16
 font = None
-GAMECONTROLLERDB_PATH = os.path.join(SCRIPT_DIR, "gamecontrollerdb.txt").encode("utf-8")
+GAMECONTROLLERDB_PATH = os.path.join(SCRIPT_DIR, "data", "gamecontrollerdb.txt").encode("utf-8")
 
 DEVICE_PROFILES = {
     "gp2040": "digital_stick",
@@ -32,13 +33,14 @@ DEVICE_PROFILES = {
     "brook": "digital_stick",  # many Brook fight-stick boards behave similarly
     "xinput": "digital_stick",  # GP2040-CE in XInput mode often reports as this
 }
-DEFAULT_PROFILE = "raw_analog"
+DEFAULT_PROFILE = "digital_stick"
 
 RAW_ANALOG_DEADZONE = 3000  # ignore drift within this range of center for real sticks
 DIGITAL_STICK_THRESHOLD = 8000  # deflection needed to register as a discrete direction
 
 controller_profiles: dict[int, str] = {}
 last_quantized_axis = {}
+controller_inputs: dict = {}
 
 
 def profile_for_device_name(name: str) -> str:
@@ -49,14 +51,17 @@ def profile_for_device_name(name: str) -> str:
     return DEFAULT_PROFILE
 
 
-LOG_FILE = "log.jsonl"
+LOG_FILE = os.path.join(SCRIPT_DIR, "log", "log.jsonl").encode("utf-8")
 controllers = {}
 
 
 def handleEvent(event: sdl2.SDL_Event):
     ts = sdlTsToMonotonic(event.common.timestamp)
+    i = event.cdevice.which
     match event.type:
         case sdl2.SDL_CONTROLLERBUTTONDOWN:
+            print(f"Controller found: {i}")
+            controller_inputs[i]["buttons"].append(event.cbutton.button)
             logEvent(
                 ts,
                 "button-down",
@@ -64,6 +69,12 @@ def handleEvent(event: sdl2.SDL_Event):
                 button=event.cbutton.button,
             )
         case sdl2.SDL_CONTROLLERBUTTONUP:
+            try:
+                controller_inputs[i]["buttons"].remove(event.cbutton.button)
+            except ValueError:
+                print(
+                    f"Button not found in controller input. Controller: {event.cbutton.which}, Button: {event.cbutton.button}"
+                )
             logEvent(
                 ts,
                 "button-up",
@@ -89,6 +100,7 @@ def handleEvent(event: sdl2.SDL_Event):
                     key = (which, axis)
                     if last_quantized_axis.get(key) != quantized:
                         last_quantized_axis[key] = quantized
+                        controller_inputs[i]["axis"].update({axis: quantized})
                         logEvent(
                             ts,
                             "axis_direction",
@@ -98,13 +110,10 @@ def handleEvent(event: sdl2.SDL_Event):
                         )
                 case _:
                     if abs(value) >= RAW_ANALOG_DEADZONE:
+                        controller_inputs[i]["axis"].update({axis: value})
                         logEvent(
-                            ts, "axis_motion",
-                            controller=which,
-                            axis=axis,
-                            value=value
+                            ts, "axis_motion", controller=which, axis=axis, value=value
                         )
-
 
         case sdl2.SDL_CONTROLLERDEVICEADDED:
             i = event.cdevice.which
@@ -115,10 +124,15 @@ def handleEvent(event: sdl2.SDL_Event):
             name = sdl2.SDL_GameControllerName(controller).decode("utf-8")
             profile = profile_for_device_name(name)
             controller_profiles[instance_id] = profile
+            controller_inputs[instance_id] = {
+                "buttons": [],
+                "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))},
+            }
+            print(f"added device, controllers \n {controller_inputs}")
             logEvent(
                 ts,
                 "controller-connected",
-                controller=sdl2.SDL_JoystickInstanceID(joystick),
+                controller=instance_id,
                 name=name,
             )
         case sdl2.SDL_CONTROLLERDEVICEREMOVED:
@@ -127,6 +141,7 @@ def handleEvent(event: sdl2.SDL_Event):
                 sdl2.SDL_GameControllerClose(controllers[instance_id])
                 del controllers[instance_id]
             controller_profiles.pop(instance_id, None)
+            controller_inputs.pop(instance_id, None)
             logEvent(ts, "controller_disconnected", controller=instance_id)
         case sdl2.SDL_KEYDOWN:
             if not event.key.repeat:
@@ -147,8 +162,50 @@ def logEvent(ts, event_type, **kwargs):
     print(entry)
     log_fp.write(json.dumps(entry) + "\n")
     log_fp.flush()
-    detail = ", ".join(f"{k}={v}" for k, v in kwargs.items())
-    overlay_lines.append(f"{event_type} ({detail})")
+    # detail = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+    # overlay_lines.append(f"{event_type} ({detail})")
+
+
+# Pulled from claude
+def _text_width(text):
+    assert font is not None, "font not loaded -- call main() first"
+    w, h = ctypes.c_int(), ctypes.c_int()
+    TTF_SizeUTF8(font, text.encode("utf-8"), ctypes.byref(w), ctypes.byref(h))
+    return w.value
+
+
+def wrap_to_width(text, max_width):
+    """Break text into a list of lines that each fit within max_width pixels."""
+    lines = []
+    current = ""
+
+    for word in text.split(" "):
+        candidate = word if not current else f"{current} {word}"
+        if _text_width(candidate) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            current = ""
+
+        if _text_width(word) <= max_width:
+            current = word
+            continue
+
+        # a single word is wider than the line -- break it up by character
+        chunk = ""
+        for ch in word:
+            if _text_width(chunk + ch) <= max_width:
+                chunk += ch
+            else:
+                lines.append(chunk)
+                chunk = ch
+        current = chunk
+
+    if current:
+        lines.append(current)
+    return lines or [""]
 
 
 # Pulled from claude
@@ -158,15 +215,31 @@ def draw_overlay(windowsurface):
     color = SDL_Color(0, 255, 0)
     line_height = FONT_SIZE + 4
     y = 8
+    margin = 8
+    max_width = windowsurface.contents.w - (margin * 2)
+    max_height = windowsurface.contents.h
 
-    for line in overlay_lines:
-        text_surface = TTF_RenderText_Blended(font, line.encode("utf-8"), color)
-        if not text_surface:
-            continue  # skip a line that failed to render rather than crash
-        dest_rect = SDL_Rect(8, y, 0, 0)
-        SDL_BlitSurface(text_surface, None, windowsurface, dest_rect)
-        SDL_FreeSurface(text_surface)
-        y += line_height
+    for controller, inputs in controller_inputs.items():
+        if y + line_height > max_height:
+            break
+
+        axis_string = ", ".join(f"Axis {k}: {v}" for k, v in inputs["axis"].items())
+        button_string = ", ".join(str(b) for b in inputs["buttons"])
+        line = f"Controller {controller}: ({axis_string}), (Button: {button_string})"
+
+        for wrapped_line in wrap_to_width(line, max_width):
+            if y + line_height > max_height:
+                break  # ran out of vertical room mid-controller
+
+            text_surface = TTF_RenderText_Blended(
+                font, wrapped_line.encode("utf-8"), color
+            )
+            if not text_surface:
+                continue
+            dest_rect = SDL_Rect(margin, y, 0, 0)
+            SDL_BlitSurface(text_surface, None, windowsurface, dest_rect)
+            SDL_FreeSurface(text_surface)
+            y += line_height
 
 
 def main():
@@ -175,7 +248,7 @@ def main():
     sdl_epoch_monotonic = time.monotonic() - (SDL_GetTicks() / 1000.0)
 
     if os.path.exists(GAMECONTROLLERDB_PATH.decode("utf-8")):
-        num_loaded = SDL_GameControllerAddMappingsFromFile(GAMECONTROLLERDB_PATH)
+        SDL_GameControllerAddMappingsFromFile(GAMECONTROLLERDB_PATH)
 
     if TTF_Init() != 0:
         print(f"TTF_Init failed: {TTF_GetError()}")
@@ -192,8 +265,8 @@ def main():
         b"Hello World",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
-        592,
-        460,
+        750,
+        750,
         SDL_WINDOW_SHOWN,
     )
     windowsurface = SDL_GetWindowSurface(window)
@@ -206,8 +279,12 @@ def main():
         controllers[instance_id] = controller
         name = sdl2.SDL_GameControllerName(controller).decode("utf-8")
         profile = profile_for_device_name(name)
+        controller_inputs[i] = {
+            "buttons": [],
+            "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))},
+        }
         controller_profiles[instance_id] = profile
-        print(f"found controller: {name}")
+        print(f"found controller: {controller_inputs}")
 
     background = SDL_LoadBMP(b"exampleimage.bmp")
     SDL_BlitSurface(background, None, windowsurface, None)
@@ -217,12 +294,16 @@ def main():
 
     running = True
     event = SDL_Event()
+    running = True
+    event = SDL_Event()
     while running:
         while SDL_PollEvent(ctypes.byref(event)) != 0:
             if event.type == SDL_QUIT:
                 running = False
                 break
             handleEvent(event)
+
+        if running:
             SDL_FillRect(
                 windowsurface, None, SDL_MapRGB(windowsurface.contents.format, 0, 0, 0)
             )
