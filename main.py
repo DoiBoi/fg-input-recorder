@@ -1,18 +1,21 @@
 # Part of the code was taken from https://pysdl2.readthedocs.io/en/0.9.13/modules/sdl2.html and from claude
-from functools import reduce
 import ctypes
 import json
 import os
 import sys
 import time
 from collections import deque
+from functools import reduce
 
 import sdl2.ext
+from input_handling.InputReader import InputReader
 from sdl2 import *
 from sdl2.sdlttf import *
 
 sdl_epoch_monotonic = None
 log_fp = None
+
+reader = InputReader("sf6")
 
 OVERLAY_MAX_LINES = 12
 # overlay_lines: deque[str] = deque(maxlen=OVERLAY_MAX_LINES)
@@ -60,8 +63,8 @@ def handleEvent(event: sdl2.SDL_Event):
     i = event.cdevice.which
     match event.type:
         case sdl2.SDL_CONTROLLERBUTTONDOWN:
-            print(f"Controller found: {i}")
             controller_inputs[i]["buttons"].append(event.cbutton.button)
+            controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
             logEvent(
                 ts,
                 "button-down",
@@ -75,6 +78,7 @@ def handleEvent(event: sdl2.SDL_Event):
                 print(
                     f"Button not found in controller input. Controller: {event.cbutton.which}, Button: {event.cbutton.button}"
                 )
+            controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
             logEvent(
                 ts,
                 "button-up",
@@ -101,6 +105,7 @@ def handleEvent(event: sdl2.SDL_Event):
                     if last_quantized_axis.get(key) != quantized:
                         last_quantized_axis[key] = quantized
                         controller_inputs[i]["axis"].update({axis: quantized})
+                        controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
                         logEvent(
                             ts,
                             "axis_direction",
@@ -111,6 +116,7 @@ def handleEvent(event: sdl2.SDL_Event):
                 case _:
                     if abs(value) >= RAW_ANALOG_DEADZONE:
                         controller_inputs[i]["axis"].update({axis: value})
+                        controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
                         logEvent(
                             ts, "axis_motion", controller=which, axis=axis, value=value
                         )
@@ -128,6 +134,7 @@ def handleEvent(event: sdl2.SDL_Event):
                 "buttons": [],
                 "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))},
             }
+            controller_inputs[instance_id]["notation"] = reader.parseInput(controller_inputs[instance_id])
             print(f"added device, controllers \n {controller_inputs}")
             logEvent(
                 ts,
@@ -225,7 +232,7 @@ def draw_overlay(windowsurface):
 
         axis_string = ", ".join(f"Axis {k}: {v}" for k, v in inputs["axis"].items())
         button_string = ", ".join(str(b) for b in inputs["buttons"])
-        line = f"Controller {controller}: ({axis_string}), (Button: {button_string})"
+        line = f"Controller {controller}: ({axis_string}), (Button: {button_string}), (Notation: {inputs.get("notation", "")})"
 
         for wrapped_line in wrap_to_width(line, max_width):
             if y + line_height > max_height:
@@ -281,8 +288,9 @@ def main():
         profile = profile_for_device_name(name)
         controller_inputs[i] = {
             "buttons": [],
-            "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))},
+            "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))}
         }
+        controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
         controller_profiles[instance_id] = profile
         print(f"found controller: {controller_inputs}")
 
