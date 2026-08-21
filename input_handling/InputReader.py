@@ -1,6 +1,9 @@
 import json
 import os
+import sys
 from functools import reduce
+
+from data_mining.Backend import Backend
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -38,13 +41,17 @@ _NUMPAD_BTN_MAPPING = {
 class InputReader:
     # mapping = {}
 
-    def __init__(self, name: str = "", mapping=None) -> None:
+    def __init__(self, name: str = "", mapping=None, character=None) -> None:
+        self.frame = Backend(f"{name}_frame_data")
         if not mapping:
             self.mapping = _DEFAULTMAPPING.get(name, {})
         else:
             self.mapping = mapping
-        # self.mapping: dict[str,str] = {}
-        #
+        if not character:
+            self.moves = []
+        else:
+            self.moves = self.frame.fetchData("input, name", f"chara = \"{character}\"")[0]
+        print(self.moves)
 
     def _handleSOCD(
         self, direction: tuple[bool, bool, bool, bool]
@@ -84,7 +91,11 @@ class InputReader:
         )
         axis_moves = reduce(
             lambda acc, curr: acc + curr,
-            [self.mapping[f"a{axis}"] for axis, value in axis.items() if (f"a{axis}" in self.mapping and value == 1)],
+            [
+                self.mapping[f"a{axis}"]
+                for axis, value in axis.items()
+                if (f"a{axis}" in self.mapping and value == 1)
+            ],
             [],
         )
 
@@ -97,5 +108,7 @@ class InputReader:
         self.mapping.update(mapping)
 
     def parseInput(self, input: dict) -> str:
-        return self._toNumpad(input["axis"], input["buttons"]) + self._toAtk(input["buttons"], input["axis"])
+        return self._toNumpad(input["axis"], input["buttons"]) + self._toAtk(
+            input["buttons"], input["axis"]
+        )
         # return self.mapping.get(input, "")

@@ -3,6 +3,8 @@ import ctypes
 import json
 import os
 import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
 from collections import deque
 from functools import reduce
@@ -15,7 +17,7 @@ from sdl2.sdlttf import *
 sdl_epoch_monotonic = None
 log_fp = None
 
-reader = InputReader("sf6")
+reader = InputReader("sf6", character="Ryu")
 
 OVERLAY_MAX_LINES = 12
 # overlay_lines: deque[str] = deque(maxlen=OVERLAY_MAX_LINES)
@@ -26,7 +28,9 @@ FONT_PATH = os.path.join(
 ).encode("utf-8")
 FONT_SIZE = 16
 font = None
-GAMECONTROLLERDB_PATH = os.path.join(SCRIPT_DIR, "data", "gamecontrollerdb.txt").encode("utf-8")
+GAMECONTROLLERDB_PATH = os.path.join(SCRIPT_DIR, "data", "gamecontrollerdb.txt").encode(
+    "utf-8"
+)
 
 DEVICE_PROFILES = {
     "gp2040": "digital_stick",
@@ -105,7 +109,9 @@ def handleEvent(event: sdl2.SDL_Event):
                     if last_quantized_axis.get(key) != quantized:
                         last_quantized_axis[key] = quantized
                         controller_inputs[i]["axis"].update({axis: quantized})
-                        controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
+                        controller_inputs[i]["notation"] = reader.parseInput(
+                            controller_inputs[i]
+                        )
                         logEvent(
                             ts,
                             "axis_direction",
@@ -116,7 +122,9 @@ def handleEvent(event: sdl2.SDL_Event):
                 case _:
                     if abs(value) >= RAW_ANALOG_DEADZONE:
                         controller_inputs[i]["axis"].update({axis: value})
-                        controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
+                        controller_inputs[i]["notation"] = reader.parseInput(
+                            controller_inputs[i]
+                        )
                         logEvent(
                             ts, "axis_motion", controller=which, axis=axis, value=value
                         )
@@ -134,7 +142,9 @@ def handleEvent(event: sdl2.SDL_Event):
                 "buttons": [],
                 "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))},
             }
-            controller_inputs[instance_id]["notation"] = reader.parseInput(controller_inputs[instance_id])
+            controller_inputs[instance_id]["notation"] = reader.parseInput(
+                controller_inputs[instance_id]
+            )
             print(f"added device, controllers \n {controller_inputs}")
             logEvent(
                 ts,
@@ -232,7 +242,7 @@ def draw_overlay(windowsurface):
 
         axis_string = ", ".join(f"Axis {k}: {v}" for k, v in inputs["axis"].items())
         button_string = ", ".join(str(b) for b in inputs["buttons"])
-        line = f"Controller {controller}: ({axis_string}), (Button: {button_string}), (Notation: {inputs.get("notation", "")})"
+        line = f"Controller {controller}: ({axis_string}), (Button: {button_string}), (Notation: {inputs.get('notation', '')})"
 
         for wrapped_line in wrap_to_width(line, max_width):
             if y + line_height > max_height:
@@ -288,7 +298,7 @@ def main():
         profile = profile_for_device_name(name)
         controller_inputs[i] = {
             "buttons": [],
-            "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))}
+            "axis": {i: 0 for i in range(sdl2.SDL_JoystickNumAxes(joystick))},
         }
         controller_inputs[i]["notation"] = reader.parseInput(controller_inputs[i])
         controller_profiles[instance_id] = profile
